@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  engine:
+    name: Projection engine (Node)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # No dependencies to install: the engine is plain CommonJS and the suite
+      # is node:test, so there is no lockfile and nothing to restore.
+      - name: Run engine tests
+        working-directory: backend
+        run: npm test
+
+  apps:
+    name: Shared module (Kotlin Multiplatform)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      # The shared module declares an `android { }` target, so the Android SDK
+      # has to be present for Gradle to even configure the project — the desktop
+      # tests cannot be reached without it.
+      - uses: android-actions/setup-android@v3
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Run shared tests
+        working-directory: apps
+        run: ./gradlew :shared:desktopTest --stacktrace
+
+      # Uploaded so a failure can be read without re-running anything locally.
+      - name: Upload test report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-report
+          path: apps/shared/build/reports/tests/desktopTest

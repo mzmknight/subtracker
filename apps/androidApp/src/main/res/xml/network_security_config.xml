@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Peer sync talks plain HTTP to other devices on the local network, and to a
+    self-hosted PocketBase reached over Tailscale. Android blocks cleartext by
+    default from targetSdk 28, which silently kills every outgoing sync — the
+    app can be connected *to*, but can never connect *out*.
+
+    Android's network security config matches domains and literal hosts, not CIDR
+    ranges, so there is no way to say "private addresses only" here. Cleartext is
+    therefore permitted generally, which is acceptable because:
+
+      - peer traffic never leaves the local network,
+      - nothing moves until two devices have paired and exchanged a secret,
+      - every sync request carries that secret, and
+      - the server address is one the user typed themselves.
+
+    If this ever talks to something on the public internet, it should be HTTPS
+    and this file should be narrowed to the specific hosts that need cleartext.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

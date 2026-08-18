@@ -1,0 +1,63 @@
+[versions]
+# Gradle 9.5.0 and Kotlin 2.2.10 are the versions this project is built and tested against
+# down, so most of this resolves from the existing ~/.gradle cache.
+agp = "9.3.1"
+kotlin = "2.2.10"
+compose = "1.11.1"
+ktor = "3.5.2"
+serialization = "1.11.0"
+coroutines = "1.11.0"
+lifecycle = "2.11.0"
+activityCompose = "1.9.3"
+sqldelight = "2.3.2"
+jmdns = "3.6.3"
+zxing = "3.5.4"
+camerax = "1.6.1"
+
+[libraries]
+ktor-client-core = { group = "io.ktor", name = "ktor-client-core", version.ref = "ktor" }
+ktor-client-okhttp = { group = "io.ktor", name = "ktor-client-okhttp", version.ref = "ktor" }
+ktor-client-content-negotiation = { group = "io.ktor", name = "ktor-client-content-negotiation", version.ref = "ktor" }
+ktor-client-logging = { group = "io.ktor", name = "ktor-client-logging", version.ref = "ktor" }
+ktor-serialization-json = { group = "io.ktor", name = "ktor-serialization-kotlinx-json", version.ref = "ktor" }
+kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "serialization" }
+kotlinx-coroutines-core = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-core", version.ref = "coroutines" }
+kotlinx-coroutines-swing = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-swing", version.ref = "coroutines" }
+# JetBrains' multiplatform ViewModel, so screen state survives rotation on
+# Android and behaves identically on desktop.
+lifecycle-viewmodel-compose = { group = "org.jetbrains.androidx.lifecycle", name = "lifecycle-viewmodel-compose", version.ref = "lifecycle" }
+androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }
+# Local data is authoritative now — it holds writes the server has not seen — so
+# it needs transactions rather than a rewritten JSON file.
+sqldelight-runtime = { group = "app.cash.sqldelight", name = "runtime", version.ref = "sqldelight" }
+sqldelight-coroutines = { group = "app.cash.sqldelight", name = "coroutines-extensions", version.ref = "sqldelight" }
+sqldelight-android-driver = { group = "app.cash.sqldelight", name = "android-driver", version.ref = "sqldelight" }
+sqldelight-sqlite-driver = { group = "app.cash.sqldelight", name = "sqlite-driver", version.ref = "sqldelight" }
+# Peer discovery on the local network for the desktop side; Android uses its own NSD.
+jmdns = { group = "org.jmdns", name = "jmdns", version.ref = "jmdns" }
+# Pure-Java QR encode/decode. Chosen over ML Kit so the app needs no Google Play
+# Services — it is otherwise entirely Google-free and should run on a de-Googled phone.
+zxing-core = { group = "com.google.zxing", name = "core", version.ref = "zxing" }
+# Test-only: decodes a generated QR back out of an image.
+zxing-javase = { group = "com.google.zxing", name = "javase", version.ref = "zxing" }
+camerax-camera2 = { group = "androidx.camera", name = "camera-camera2", version.ref = "camerax" }
+camerax-lifecycle = { group = "androidx.camera", name = "camera-lifecycle", version.ref = "camerax" }
+camerax-view = { group = "androidx.camera", name = "camera-view", version.ref = "camerax" }
+androidx-lifecycle-runtime-compose = { group = "androidx.lifecycle", name = "lifecycle-runtime-compose", version.ref = "lifecycle" }
+ktor-server-cio = { group = "io.ktor", name = "ktor-server-cio", version.ref = "ktor" }
+ktor-server-core = { group = "io.ktor", name = "ktor-server-core", version.ref = "ktor" }
+ktor-server-content-negotiation = { group = "io.ktor", name = "ktor-server-content-negotiation", version.ref = "ktor" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+# Since AGP 9 the plain com.android.library plugin refuses to coexist with the
+# Kotlin Multiplatform plugin; KMP modules must use this one instead.
+android-kmp-library = { id = "com.android.kotlin.multiplatform.library", version.ref = "agp" }
+kotlin-multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
+# Deliberately no org.jetbrains.kotlin.android: AGP 9 supplies Kotlin for Android
+# modules itself, and the standalone plugin fails against it.
+kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
+kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
+compose-multiplatform = { id = "org.jetbrains.compose", version.ref = "compose" }
+sqldelight = { id = "app.cash.sqldelight", version.ref = "sqldelight" }

@@ -1,0 +1,18 @@
+# The release signing key and its passwords. Anyone holding these can build
+# something Android accepts as an update to SubTracker on your devices.
+# Back them up out of band — see signing/README.md — never commit them.
+signing/
+
+# Build output
+apps/.kotlin/
+tools/out/
+apps/build/
+apps/*/build/
+apps/.gradle/
+apps/local.properties
+backend/pb_data/
+dist/
+
+# PocketBase runtime, downloaded rather than checked in
+backend/pocketbase.exe
+backend/pocketbase

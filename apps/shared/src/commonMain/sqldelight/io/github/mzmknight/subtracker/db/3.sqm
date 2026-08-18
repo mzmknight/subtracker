@@ -1,0 +1,26 @@
+-- Migration 3 -> 4: the settings that follow you between devices.
+--
+-- Until now every setting was device-local, held in SharedPreferences or
+-- java.util.prefs. That was right for some of them and wrong for others, and
+-- the difference is who the setting is about:
+--
+--   about YOU      how far ahead to remind, what time of day, which currency to
+--                  show totals in, what a euro is worth -- retyping these on
+--                  every device is pure friction
+--   about DEVICE   whether *this* phone is allowed to notify, which server it
+--                  talks to, which peers it has paired with
+--
+-- Only the first kind lives here. In particular `reminders_on` stays local, so
+-- your phone can nag while your laptop stays quiet -- the case that kept the
+-- whole group device-local before this.
+--
+-- One row per key rather than one row holding all of them. Both would merge,
+-- but a single blob means changing the reminder time on your phone and the home
+-- currency on your laptop makes the two edits collide, and last-write-wins
+-- throws one away. Keyed separately, each lands on its own and both survive.
+CREATE TABLE setting (
+    id         TEXT NOT NULL PRIMARY KEY,
+    updated_at TEXT NOT NULL,
+    deleted    INTEGER NOT NULL DEFAULT 0,
+    value      TEXT NOT NULL DEFAULT ''
+);

@@ -1,0 +1,190 @@
+-- SubTracker local database.
+--
+-- Holds only *intent*: subscriptions, their price history, and the overrides
+-- applied to individual charges. Charges themselves are derived — recomputed by
+-- Projection from these three tables — so they are neither stored nor synced.
+-- That is what keeps a full sync payload to a few KB.
+--
+-- Every table here is syncable and therefore carries the same envelope:
+--   updated_at  encoded hybrid logical clock; lexicographic order is causal order
+--   deleted     tombstone, because a removed row and a never-seen row are
+--               indistinguishable during a merge
+
+CREATE TABLE subscription (
+    id             TEXT NOT NULL PRIMARY KEY,
+    updated_at     TEXT NOT NULL,
+    deleted        INTEGER NOT NULL DEFAULT 0,
+    name           TEXT NOT NULL,
+    vendor         TEXT NOT NULL DEFAULT '',
+    category       TEXT NOT NULL DEFAULT 'other',
+    currency       TEXT NOT NULL DEFAULT 'GBP',
+    cycle_unit     TEXT NOT NULL,
+    cycle_count    INTEGER NOT NULL,
+    anchor_date    TEXT NOT NULL,
+    status         TEXT NOT NULL,
+    end_date       TEXT,
+    trial_end      TEXT,
+    payment_method TEXT NOT NULL DEFAULT '',
+    colour         TEXT NOT NULL DEFAULT '',
+    icon           TEXT NOT NULL DEFAULT '',
+    notes          TEXT NOT NULL DEFAULT '',
+    -- Reminder rule. '' follows the device's global setting, 'off' never
+    -- reminds, 'custom' uses the two columns after it. See 2.sqm.
+    notify_mode        TEXT NOT NULL DEFAULT '',
+    notify_days_before INTEGER NOT NULL DEFAULT 3,
+    notify_minute      INTEGER NOT NULL DEFAULT 540
+);
+
+CREATE INDEX subscription_updated ON subscription(updated_at);
+
+CREATE TABLE price_period (
+    id              TEXT NOT NULL PRIMARY KEY,
+    updated_at      TEXT NOT NULL,
+    deleted         INTEGER NOT NULL DEFAULT 0,
+    subscription_id TEXT NOT NULL,
+    amount_minor    INTEGER NOT NULL,
+    effective_from  TEXT NOT NULL,
+    note            TEXT NOT NULL DEFAULT ''
+);
+
+CREATE INDEX price_period_subscription ON price_period(subscription_id);
+
+-- Skips, refunds and corrected amounts.
+--
+-- Keyed by (subscription_id, due_date) rather than by a charge id, because each
+-- device mints its own charge rows and they have no shared identity. The primary
+-- key is *derived* from that pair (see OverrideId), so two devices that skip the
+-- same charge independently produce the same row id and last-write-wins settles
+-- it — rather than two rows that both claim the same charge.
+CREATE TABLE charge_override (
+    id              TEXT NOT NULL PRIMARY KEY,
+    updated_at      TEXT NOT NULL,
+    deleted         INTEGER NOT NULL DEFAULT 0,
+    subscription_id TEXT NOT NULL,
+    due_date        TEXT NOT NULL,
+    kind            TEXT NOT NULL,
+    amount_minor    INTEGER
+);
+
+CREATE INDEX charge_override_subscription ON charge_override(subscription_id);
+
+-- Known peers. Local-only bookkeeping; never synced, and deliberately so —
+-- the shared secret in here must not travel to a third device.
+CREATE TABLE sync_state (
+    peer_id      TEXT NOT NULL PRIMARY KEY,
+    peer_name    TEXT NOT NULL DEFAULT '',
+    last_sync_at INTEGER NOT NULL DEFAULT 0,
+    secret       TEXT NOT NULL DEFAULT '',
+    -- Where this peer was last reachable. Without it, a paired device can only
+    -- be synced again if mDNS happens to rediscover it — and pairing codes are
+    -- single-use, so there is no way back.
+    host         TEXT NOT NULL DEFAULT '',
+    port         INTEGER NOT NULL DEFAULT 0
+);
+
+-- Settings that belong to the user rather than to the device: the reminder rule,
+-- the home currency, and hand-entered conversion rates. See 3.sqm for which
+-- settings are deliberately NOT here.
+--
+-- One row per key, so an edit to the reminder time on one device and an edit to
+-- the home currency on another both survive the merge instead of colliding.
+CREATE TABLE setting (
+    id         TEXT NOT NULL PRIMARY KEY,
+    updated_at TEXT NOT NULL,
+    deleted    INTEGER NOT NULL DEFAULT 0,
+    value      TEXT NOT NULL DEFAULT ''
+);
+
+-- ---------------------------------------------------------------- subscriptions
+
+selectAllSubscriptions:
+SELECT * FROM subscription ORDER BY name COLLATE NOCASE;
+
+selectLiveSubscriptions:
+SELECT * FROM subscription WHERE deleted = 0 ORDER BY name COLLATE NOCASE;
+
+selectSubscriptionById:
+SELECT * FROM subscription WHERE id = ?;
+
+upsertSubscription:
+INSERT OR REPLACE INTO subscription(
+    id, updated_at, deleted, name, vendor, category, currency,
+    cycle_unit, cycle_count, anchor_date, status, end_date, trial_end,
+    payment_method, colour, icon, notes,
+    notify_mode, notify_days_before, notify_minute
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+-- ---------------------------------------------------------------- price periods
+
+selectAllPricePeriods:
+SELECT * FROM price_period ORDER BY effective_from;
+
+selectLivePricePeriodsFor:
+SELECT * FROM price_period
+WHERE subscription_id = ? AND deleted = 0
+ORDER BY effective_from;
+
+upsertPricePeriod:
+INSERT OR REPLACE INTO price_period(
+    id, updated_at, deleted, subscription_id, amount_minor, effective_from, note
+) VALUES (?, ?, ?, ?, ?, ?, ?);
+
+-- ---------------------------------------------------------------- overrides
+
+selectAllOverrides:
+SELECT * FROM charge_override;
+
+selectLiveOverridesFor:
+SELECT * FROM charge_override WHERE subscription_id = ? AND deleted = 0;
+
+selectOverrideById:
+SELECT * FROM charge_override WHERE id = ?;
+
+upsertOverride:
+INSERT OR REPLACE INTO charge_override(
+    id, updated_at, deleted, subscription_id, due_date, kind, amount_minor
+) VALUES (?, ?, ?, ?, ?, ?, ?);
+
+-- ---------------------------------------------------------------- settings
+
+selectAllSettings:
+SELECT * FROM setting;
+
+selectSetting:
+SELECT * FROM setting WHERE id = ?;
+
+upsertSetting:
+INSERT OR REPLACE INTO setting(id, updated_at, deleted, value) VALUES (?, ?, ?, ?);
+
+-- ---------------------------------------------------------------- sync state
+
+selectPeers:
+SELECT * FROM sync_state ORDER BY last_sync_at DESC;
+
+selectPeer:
+SELECT * FROM sync_state WHERE peer_id = ?;
+
+upsertPeer:
+INSERT OR REPLACE INTO sync_state(peer_id, peer_name, last_sync_at, secret, host, port)
+VALUES (?, ?, ?, ?, ?, ?);
+
+-- Keeps the address current: a phone's IP changes between networks, so the
+-- address that worked at pairing time may not be the one that works today.
+touchPeer:
+UPDATE sync_state SET last_sync_at = ?, peer_name = ?, host = ?, port = ? WHERE peer_id = ?;
+
+deletePeer:
+DELETE FROM sync_state WHERE peer_id = ?;
+
+-- ---------------------------------------------------------------- maintenance
+
+countSubscriptions:
+SELECT COUNT(*) FROM subscription WHERE deleted = 0;
+
+clearAll {
+    DELETE FROM subscription;
+    DELETE FROM price_period;
+    DELETE FROM charge_override;
+    DELETE FROM setting;
+    DELETE FROM sync_state;
+}

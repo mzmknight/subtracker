@@ -1,0 +1,20 @@
+-- Migration 2 -> 3: per-subscription reminder rules.
+--
+-- On the subscription rather than in a local settings table, so they sync.
+-- "Never remind me about this one" is a decision about the subscription, not
+-- about the device you happened to make it on, and having to repeat it on every
+-- device would make it not worth setting.
+--
+-- The global defaults deliberately do NOT live here — they stay device-local in
+-- AppSettings, because wanting your phone to nag and your laptop to stay quiet
+-- is a reasonable thing to want.
+--
+-- notify_mode  ''       follow the device's global setting
+--              'off'    never remind, whatever the global says
+--              'custom' use the two columns below
+-- The columns are only read when the mode is 'custom', so their defaults are
+-- placeholders rather than meaningful values.
+
+ALTER TABLE subscription ADD COLUMN notify_mode TEXT NOT NULL DEFAULT '';
+ALTER TABLE subscription ADD COLUMN notify_days_before INTEGER NOT NULL DEFAULT 3;
+ALTER TABLE subscription ADD COLUMN notify_minute INTEGER NOT NULL DEFAULT 540;

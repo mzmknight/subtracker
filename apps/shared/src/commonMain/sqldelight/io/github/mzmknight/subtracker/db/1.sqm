@@ -1,0 +1,12 @@
+-- Migration 1 -> 2: remember where each paired device lives.
+--
+-- Pairing stored the shared secret but not the address, so a device could only
+-- be synced again if mDNS rediscovered it. Pairing codes are single-use, so
+-- when discovery failed there was no way back short of re-pairing.
+--
+-- A real migration rather than a recreate: by this point both devices hold
+-- subscriptions the user typed in, and dropping the database to add two columns
+-- would lose them.
+
+ALTER TABLE sync_state ADD COLUMN host TEXT NOT NULL DEFAULT '';
+ALTER TABLE sync_state ADD COLUMN port INTEGER NOT NULL DEFAULT 0;

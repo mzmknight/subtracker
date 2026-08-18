@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    The adaptive icon. Android masks the foreground to whatever shape the
+    launcher uses — circle, squircle, rounded square — and may parallax the two
+    layers against each other, which is why the artwork has to live inside the
+    middle 66% of the canvas rather than filling it.
+
+    The background is a flat colour rather than a bitmap: the mark is the icon,
+    and a gradient would be cropped differently on every launcher.
+-->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/ic_launcher_background" />
+    <foreground android:drawable="@mipmap/ic_launcher_foreground" />
+    <monochrome android:drawable="@drawable/ic_launcher_monochrome" />
+</adaptive-icon>

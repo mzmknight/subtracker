@@ -1,0 +1,13 @@
+{
+  "name": "subtracker-backend",
+  "version": "0.1.0",
+  "private": true,
+  "description": "SubTracker billing projection engine and PocketBase hooks",
+  "type": "commonjs",
+  "scripts": {
+    "test": "node --test \"test/*.test.js\"",
+    "vectors": "node scripts/generate-vectors.js",
+    "sync-hooks": "node scripts/sync-hooks.js",
+    "build": "npm run vectors && npm run test && npm run sync-hooks"
+  }
+}

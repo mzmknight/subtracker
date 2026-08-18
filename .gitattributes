@@ -1,0 +1,20 @@
+# Normalise text to LF in the repository. Without this a Windows checkout can
+# commit CRLF into gradlew, and the Linux CI runner then fails to execute it
+# with a "bad interpreter" error that says nothing about line endings.
+* text=auto eol=lf
+
+# Executable shell scripts must stay LF on every platform.
+gradlew        text eol=lf
+*.sh           text eol=lf
+
+# Windows-only scripts keep CRLF.
+*.bat          text eol=crlf
+*.cmd          text eol=crlf
+
+# Binary — never touched.
+*.jar          binary
+*.png          binary
+*.ico          binary
+*.jks          binary
+*.apk          binary
+*.zip          binary
