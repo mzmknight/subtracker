@@ -3,7 +3,10 @@
 # with a "bad interpreter" error that says nothing about line endings.
 * text=auto eol=lf
 
-# Executable shell scripts must stay LF on every platform.
+# Executable shell scripts must stay LF on every platform. Note that eol only
+# covers line endings — the executable bit is a separate thing git tracks in the
+# index, set with `git update-index --chmod=+x`. Without it a Linux runner finds
+# gradlew and refuses to run it, exiting 126.
 gradlew        text eol=lf
 *.sh           text eol=lf
 
