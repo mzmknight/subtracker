@@ -6,6 +6,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import io.github.mzmknight.subtracker.core.PlainDate
 import io.github.mzmknight.subtracker.db.SubTrackerDatabase
 import io.github.mzmknight.subtracker.sync.ClockStore
 import io.github.mzmknight.subtracker.sync.DeviceInfo
@@ -14,7 +15,8 @@ import io.github.mzmknight.subtracker.sync.Hlc
 /**
  * Upgrading a database that already has the user's data in it.
  *
- * Schema version 4 added the `setting` table. The version-3 schema is written
+ * Schema version 4 added the `setting` table and 5 added `replaces`. The
+ * version-3 schema is written
  * out by hand below rather than generated, because generating it from today's
  * definitions would test the migration against itself and pass no matter what:
  * the whole question is whether a database created by the *previous release*
@@ -159,7 +161,10 @@ class SettingsMigrationTest {
             0,
         )
 
-        SubTrackerDatabase.Schema.migrate(driver, 3, 4)
+        // To whatever the current version is, not a hardcoded one: this test is
+        // about a real device upgrading from the last release, so it has to keep
+        // covering the whole chain as further migrations are added.
+        SubTrackerDatabase.Schema.migrate(driver, 3, SubTrackerDatabase.Schema.version)
 
         val identity = TestIdentity("devicexxxxxxxxxx", "Device")
         val store = LocalStore(SubTrackerDatabase(driver), identity, identity)
@@ -177,5 +182,13 @@ class SettingsMigrationTest {
         store.putSetting("home_currency", "EUR")
         assertEquals("EUR", store.setting("home_currency"))
         assertEquals(1, store.exportAll().settings.size)
+
+        // And the later column is usable too — an upgraded device can switch a
+        // plan, not merely open without crashing.
+        assertEquals("", subscription.replaces)
+        val yearly = store.switchPlan(
+            subscription, PlainDate.parse("2026-09-15"), "year", 1, amountMinor = 9900,
+        )
+        assertEquals(subscription.id, yearly.replaces)
     }
 }

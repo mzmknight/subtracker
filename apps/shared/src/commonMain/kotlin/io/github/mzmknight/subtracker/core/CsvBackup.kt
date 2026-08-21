@@ -39,6 +39,8 @@ object CsvBackup {
         "notify_mode", "notify_days_before", "notify_minute",
         // setting
         "value",
+        // plan switch link
+        "replaces",
     )
 
     private const val TYPE = 0
@@ -68,6 +70,7 @@ object CsvBackup {
     private const val NOTIFY_DAYS = 24
     private const val NOTIFY_MINUTE = 25
     private const val VALUE = 26
+    private const val REPLACES = 27
 
     // ------------------------------------------------------------- export
 
@@ -110,6 +113,10 @@ object CsvBackup {
                         it[NOTIFY_MODE] = s.notifyMode
                         it[NOTIFY_DAYS] = s.notifyDaysBefore.toString()
                         it[NOTIFY_MINUTE] = s.notifyMinute.toString()
+                        // Without this a restored backup would forget that two
+                        // records are one subscription, and show the old plan
+                        // again as a separate line.
+                        it[REPLACES] = s.replaces
                         // `icon` is deliberately absent: a logo is tens of
                         // kilobytes of base64 that would dwarf the real data and
                         // make the file unreadable in a spreadsheet. Import
@@ -303,6 +310,7 @@ object CsvBackup {
                                 ?: Reminders.DEFAULT.daysBefore,
                             notifyMinute = cell(cells, NOTIFY_MINUTE).toIntOrNull()
                                 ?: Reminders.DEFAULT.minute,
+                            replaces = cell(cells, REPLACES),
                         )
                     }
                 }

@@ -11,6 +11,7 @@ import kotlinx.coroutines.withContext
 import io.github.mzmknight.subtracker.core.DashboardFigures
 import io.github.mzmknight.subtracker.core.Figures
 import io.github.mzmknight.subtracker.core.MonthHistory
+import io.github.mzmknight.subtracker.core.Money
 import io.github.mzmknight.subtracker.core.PlainDate
 import io.github.mzmknight.subtracker.core.PriceChange
 import io.github.mzmknight.subtracker.core.Rates
@@ -65,6 +66,8 @@ data class SubscriptionDetail(
     val subscription: SubscriptionRecord,
     val prices: List<PricePeriodRecord>,
     val charges: List<ComputedCharge>,
+    /** Earlier plans this one took over from, oldest first. Usually empty. */
+    val previousPlans: List<PlanPeriod> = emptyList(),
 ) {
     fun currentPrice(asOf: PlainDate): PricePeriodRecord? =
         prices.filter { (it.from ?: return@filter false) <= asOf }.maxByOrNull { it.effectiveFrom }
@@ -75,6 +78,25 @@ data class SubscriptionDetail(
 
     fun nextCharge(today: PlainDate): ComputedCharge? =
         charges.filter { !it.isSettled(today) && !it.isSkipped }.minByOrNull { it.due.iso }
+
+    /**
+     * Everything paid on this subscription including the plans it replaced —
+     * the figure the user means by "what has F1TV cost me", which stops being
+     * the same as [paidToDate] the moment a plan is switched.
+     */
+    fun paidAcrossAllPlans(today: PlainDate): Long =
+        paidToDate(today) + previousPlans.sumOf { it.paid }
+}
+
+/** One earlier plan, summarised for the detail screen. */
+data class PlanPeriod(
+    val subscription: SubscriptionRecord,
+    val paid: Long,
+    val charges: Int,
+    val from: PlainDate?,
+    val until: PlainDate?,
+) {
+    val label: String get() = subscription.cycleLabel.replaceFirstChar { it.uppercase() }
 }
 
 /**
@@ -128,11 +150,19 @@ class AppState(private val scope: CoroutineScope) {
             SortOrder.Cycle -> compareBy<SubscriptionRecord> { CYCLE_ORDER.indexOf(it.cycleUnit) }
                 .thenBy { it.cycleCount }
         }
-        return subscriptions.sortedWith(
-            compareBy<SubscriptionRecord> { !it.isLive }
-                .then(comparator)
-                .thenBy { it.name.lowercase() },
-        )
+        // A superseded plan is hidden rather than deleted. Its charges are real
+        // and still count in History and in the subscription's own total, but as
+        // a *row* it is the same subscription on old terms — showing both makes
+        // one F1TV look like two.
+        val superseded = subscriptions.mapNotNull { it.replaces.ifBlank { null } }.toSet()
+
+        return subscriptions
+            .filterNot { it.id in superseded }
+            .sortedWith(
+                compareBy<SubscriptionRecord> { !it.isLive }
+                    .then(comparator)
+                    .thenBy { it.name.lowercase() },
+            )
     }
 
     private fun nextDueDate(subscriptionId: String): String? =
@@ -300,6 +330,17 @@ class AppState(private val scope: CoroutineScope) {
                     subscription = subscription,
                     prices = store.pricesFor(id),
                     charges = store.chargesFor(id, _today),
+                    previousPlans = store.planHistory(id).map { plan ->
+                        val charges = store.chargesFor(plan.id, _today)
+                        val settled = charges.filter { it.isSettled(_today) }
+                        PlanPeriod(
+                            subscription = plan,
+                            paid = settled.sumOf { it.effectiveAmountMinor },
+                            charges = settled.size,
+                            from = settled.minByOrNull { it.due.iso }?.due,
+                            until = settled.maxByOrNull { it.due.iso }?.due,
+                        )
+                    },
                 )
             }
             if (loaded == null) {
@@ -348,6 +389,30 @@ class AppState(private val scope: CoroutineScope) {
             store.updateSubscription(record)
             correctedPriceMinor?.let { store.correctCurrentPrice(record.id, it) }
         }
+
+    /**
+     * @param onSwitched receives the new subscription's id so the caller can
+     *   follow it — staying on the old record would show a cancelled plan and
+     *   read as though the switch had failed.
+     */
+    fun switchPlan(
+        current: SubscriptionRecord,
+        startingOn: PlainDate,
+        cycleUnit: String,
+        cycleCount: Int,
+        amountMinor: Long,
+        onSwitched: (String) -> Unit = {},
+    ) {
+        var newId = ""
+        mutate(
+            message = "${current.name} switched to ${Money.describeCycle(cycleUnit, cycleCount)}.",
+            onSaved = { if (newId.isNotBlank()) { go(Screen.Detail(newId)); onSwitched(newId) } },
+        ) {
+            newId = store.switchPlan(
+                current, startingOn, cycleUnit, cycleCount, amountMinor,
+            ).id
+        }
+    }
 
     fun delete(record: SubscriptionRecord) {
         screen = Screen.Subscriptions

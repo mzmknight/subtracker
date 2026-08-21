@@ -104,6 +104,72 @@ fun DetailScreen(state: AppState) {
                             Text("Delete", color = MaterialTheme.colorScheme.error)
                         }
                     }
+
+                    if (detail.previousPlans.isNotEmpty()) {
+                        Spacer(Modifier.height(10.dp))
+                        KeyValue(
+                            "Paid across all plans",
+                            Money.format(detail.paidAcrossAllPlans(today), currency),
+                        )
+                    }
+                }
+            }
+        }
+
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = MaterialTheme.shapes.large,
+                elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            ) {
+                Column(modifier = Modifier.padding(20.dp)) {
+                    Text("Plan", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "Currently ${subscription.cycleLabel}. Moving to a different billing " +
+                            "cycle starts a new plan on the date you choose - what you already " +
+                            "paid on the old one is kept exactly as it was.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = mutedColour(),
+                    )
+
+                    detail.previousPlans.forEach { plan ->
+                        Spacer(Modifier.height(10.dp))
+                        Row(modifier = Modifier.fillMaxWidth()) {
+                            Text(
+                                plan.label,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Medium,
+                                modifier = Modifier.width(90.dp),
+                            )
+                            Column {
+                                Text(
+                                    if (plan.from != null && plan.until != null) {
+                                        plan.from.formatLong() + " - " + plan.until.formatLong()
+                                    } else {
+                                        "no charges recorded"
+                                    },
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = mutedColour(),
+                                )
+                                Text(
+                                    "${plan.charges} charge${if (plan.charges == 1) "" else "s"}, " +
+                                        Money.format(plan.paid, currency),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = mutedColour(),
+                                )
+                            }
+                        }
+                    }
+
+                    Spacer(Modifier.height(10.dp))
+                    SwitchPlan(
+                        currency = currency,
+                        currentUnit = subscription.cycleUnit,
+                        currentCount = subscription.cycleCount,
+                    ) { startingOn, unit, count, amountMinor ->
+                        state.switchPlan(subscription, startingOn, unit, count, amountMinor)
+                    }
                 }
             }
         }
@@ -230,6 +296,102 @@ private fun AddPriceChange(currency: String, onAdd: (Long, String) -> Unit) {
                 enabled = canAdd,
             ) {
                 Text("Save price")
+            }
+            TextButton(onClick = { open = false }) { Text("Cancel") }
+        }
+    }
+}
+
+/**
+ * Move a subscription onto a different billing cycle.
+ *
+ * Deliberately not part of the edit form. Editing `cycleUnit` in place looks
+ * like the obvious way to do this and is the one thing that must not happen:
+ * the projection recomputes every occurrence from the anchor on whatever cycle
+ * is current, so a monthly-to-yearly edit reprices charges already paid and
+ * drops the months between. This ends the old plan and starts a new one, which
+ * is what actually happened.
+ */
+@Composable
+private fun SwitchPlan(
+    currency: String,
+    currentUnit: String,
+    currentCount: Int,
+    onSwitch: (PlainDate, String, Int, Long) -> Unit,
+) {
+    var open by remember { mutableStateOf(false) }
+    var startText by remember { mutableStateOf("") }
+    var amountText by remember { mutableStateOf("") }
+    // Seeded to yearly when currently monthly and the other way round, since
+    // that is the switch people actually make.
+    var unit by remember { mutableStateOf(if (currentUnit == "year") "month" else "year") }
+    var count by remember { mutableStateOf(1) }
+
+    val start = PlainDate.parseOrNull(startText)
+    val amountMinor = Money.parseOrNull(amountText, currency)
+    val sameAsNow = unit == currentUnit && count == currentCount
+    val canSwitch = start != null && amountMinor != null && !sameAsNow
+
+    if (!open) {
+        TextButton(onClick = { open = true }) { Text("Switch plan") }
+        return
+    }
+
+    Column {
+        Spacer(Modifier.height(4.dp))
+        CyclePresets(
+            unit = unit,
+            count = count,
+            customOpen = false,
+            onPick = { pickedUnit, pickedCount -> unit = pickedUnit; count = pickedCount },
+            onCustom = {},
+        )
+
+        Spacer(Modifier.height(10.dp))
+        DateField(
+            value = startText,
+            onChange = { startText = it },
+            label = "New plan starts",
+        )
+        Spacer(Modifier.height(8.dp))
+        OutlinedTextField(
+            value = amountText,
+            onValueChange = { amountText = it },
+            label = { Text("New price") },
+            singleLine = true,
+            isError = amountText.isNotBlank() && amountMinor == null,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+            modifier = Modifier.fillMaxWidth(),
+        )
+
+        Spacer(Modifier.height(6.dp))
+        Text(
+            when {
+                sameAsNow -> "That is the cycle it is already on."
+                start != null ->
+                    "Bills " + Money.describeCycle(unit, count) + " from " +
+                        start.formatLong() + ". The old plan stops the day before, keeping " +
+                        "every charge it already made."
+                else ->
+                    "The old plan stops the day before this date, keeping every charge it " +
+                        "already made."
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = if (sameAsNow) MaterialTheme.colorScheme.error else mutedColour(),
+        )
+
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(
+                onClick = {
+                    onSwitch(start!!, unit, count, amountMinor!!)
+                    open = false
+                    startText = ""
+                    amountText = ""
+                },
+                enabled = canSwitch,
+            ) {
+                Text("Switch plan")
             }
             TextButton(onClick = { open = false }) { Text("Cancel") }
         }

@@ -56,7 +56,7 @@ import io.github.mzmknight.subtracker.core.PlainDate
 import io.github.mzmknight.subtracker.sync.SubscriptionRecord
 
 private val CATEGORIES = listOf("entertainment", "software", "utilities", "health", "finance", "other")
-private val CYCLE_UNITS = listOf("day", "week", "month", "year")
+internal val CYCLE_UNITS = listOf("day", "week", "month", "year")
 private val STATUSES = listOf("active", "trial", "paused", "cancelled")
 
 @Composable
@@ -393,7 +393,11 @@ fun EditScreen(state: AppState, subscriptionId: String?) {
                     value = endDate,
                     onChange = { endDate = it },
                     label = "Cancelled from",
-                    supportingText = "No charges are forecast on or after this date.",
+                    // "on or after" was wrong and would cost the user a
+                    // duplicate charge: the engine treats this as the last
+                    // date a subscription can still bill on, so a charge
+                    // falling exactly on it is generated.
+                    supportingText = "The last date this can still bill on.",
                 )
             }
         }
@@ -550,7 +554,7 @@ private fun Swatches(selected: String, onSelect: (String) -> Unit) {
     }
 }
 
-private data class CyclePreset(val label: String, val unit: String, val count: Int) {
+internal data class CyclePreset(val label: String, val unit: String, val count: Int) {
     fun matches(unit: String, count: Int) = unit == this.unit && count == this.count
 }
 
@@ -564,7 +568,7 @@ private data class CyclePreset(val label: String, val unit: String, val count: I
  * Four chips and a "Custom" that opens the general case is the same reach with
  * a fraction of the surface.
  */
-private val CYCLE_PRESETS = listOf(
+internal val CYCLE_PRESETS = listOf(
     CyclePreset("Weekly", "week", 1),
     CyclePreset("Monthly", "month", 1),
     CyclePreset("Quarterly", "month", 3),
@@ -579,7 +583,7 @@ private val CYCLE_PRESETS = listOf(
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun CyclePresets(
+internal fun CyclePresets(
     unit: String,
     count: Int,
     customOpen: Boolean,

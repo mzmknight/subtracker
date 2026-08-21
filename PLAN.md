@@ -571,6 +571,36 @@ SubTracker is running; waking a desktop app at nine in the morning needs a sched
 service, and neither belongs in something meant to be unzipped and run from a folder. The phone
 is the device that reliably notifies.
 
+### Switching a plan, without rewriting what you already paid
+
+Prices are versioned in `price_periods`; the billing cycle is not — it is a pair of columns on
+the subscription. `occurrenceAt` computes every occurrence from the anchor on whatever cycle is
+current, so editing monthly to yearly does not change the plan going forward, it retroactively
+reshapes the past: a £10.99 charge in July is reported as £89.99, and the months between vanish.
+Nothing warns you, and the resulting history looks entirely ordinary.
+
+A switch is therefore **two records** — the old plan frozen where it stopped, the new one anchored
+where it starts — joined by `replaces` on the newer one. `LocalStore.switchPlan` writes both plus
+the new price in one transaction, because a half-applied switch leaves either two live plans
+billing at once or none at all.
+
+- **The old plan ends the day *before* the new one starts.** `endDate` is the last date a
+  subscription can still bill on, so ending it on the switch date bills both plans that day. The
+  edit form used to say "no charges are forecast on or after this date", which is the opposite of
+  what the engine does and would have cost the user a duplicate charge; the copy now matches.
+- **`replaces` points backwards, from new to old.** It is written once at creation and never
+  touched. `superseded_by` on the old record would mean editing an old row on every switch, and
+  each edit is another chance for two devices to disagree.
+- **The list hides superseded records; History does not.** As a row it is the same subscription on
+  old terms, so showing both makes one F1TV look like two — but its charges are real and still
+  count in the month they fell in, and in "Paid across all plans" on the detail screen.
+- **Name, logo, colour and reminder rule carry over.** To the user this is the same subscription on
+  different terms; making them rebuild its appearance would make the feature not worth using.
+
+`SwitchPlanTest` asserts the old plan keeps exactly the charges it made, that no day is billed by
+both, and — deliberately — that a plain in-place edit still mangles the history, so anyone later
+"simplifying" this into an edit gets a failing test explaining why not.
+
 ### Settings that follow the user
 
 Every setting used to be device-local, which was right for some and wrong for others. The line

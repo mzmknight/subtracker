@@ -38,6 +38,16 @@ data class SubscriptionRecord(
     @SerialName("notify_days_before") val notifyDaysBefore: Int = 3,
     /** Minutes since midnight, local time. */
     @SerialName("notify_minute") val notifyMinute: Int = 540,
+    /**
+     * The subscription this one took over from, when a plan was switched.
+     *
+     * A switch is two records, not an edit: the cycle is a column rather than a
+     * versioned table, so changing it in place recomputes every past occurrence
+     * on the new cycle and rewrites months already paid. The old plan is ended
+     * where it stopped, the new one anchored where it starts, and this names the
+     * link so the pair can still be shown as one subscription.
+     */
+    @SerialName("replaces") val replaces: String = "",
 ) : Syncable, Projection.Schedule {
     val isLive: Boolean get() = !deleted && (status == "active" || status == "trial")
     val cycleLabel: String get() = Money.describeCycle(cycleUnit, cycleCount)

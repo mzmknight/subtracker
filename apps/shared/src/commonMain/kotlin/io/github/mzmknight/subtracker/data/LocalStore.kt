@@ -85,6 +85,7 @@ class LocalStore(
         notifyMode = notify_mode,
         notifyDaysBefore = notify_days_before.toInt(),
         notifyMinute = notify_minute.toInt(),
+        replaces = replaces,
     )
 
     private fun Price_period.toRecord() = PricePeriodRecord(
@@ -121,6 +122,7 @@ class LocalStore(
         record.endDate, record.trialEnd, record.paymentMethod, record.colour,
         record.icon, record.notes,
         record.notifyMode, record.notifyDaysBefore.toLong(), record.notifyMinute.toLong(),
+        record.replaces,
     )
 
     private fun write(record: PricePeriodRecord) = queries.upsertPricePeriod(
@@ -253,6 +255,82 @@ class LocalStore(
             write(price)
         }
         return record
+    }
+
+    /**
+     * End the current plan and start a new one, as two linked records.
+     *
+     * Not an edit. `cycle_unit` and `cycle_count` are columns on the
+     * subscription rather than a versioned table, so the projection recomputes
+     * *every* occurrence on whatever cycle is current — changing monthly to
+     * yearly in place reprices a 10.99 charge from July as 89.99 and drops the
+     * months between. The old plan therefore keeps its own record, frozen where
+     * it stopped, and the new one starts fresh.
+     *
+     * The old plan ends the day *before* the new one starts. `endDate` is the
+     * last date a subscription can still bill on, so ending it on the switch
+     * date itself would bill both plans that day.
+     *
+     * One transaction: a half-applied switch leaves either two live plans
+     * charging at once or none at all, and both look like the app losing data.
+     */
+    fun switchPlan(
+        current: SubscriptionRecord,
+        startingOn: PlainDate,
+        cycleUnit: String,
+        cycleCount: Int,
+        amountMinor: Long,
+    ): SubscriptionRecord {
+        val ended = current.copy(
+            status = "cancelled",
+            endDate = startingOn.plusDays(-1).iso,
+            updatedAt = stamp(),
+        )
+        val newId = RecordId.generate()
+        // Carries the name, logo, colour and reminder rule over: to the user
+        // this is the same subscription on different terms, and making them
+        // reassemble its appearance would make the feature not worth using.
+        val replacement = current.copy(
+            id = newId,
+            updatedAt = stamp(),
+            status = "active",
+            endDate = null,
+            trialEnd = null,
+            anchorDate = startingOn.iso,
+            cycleUnit = cycleUnit,
+            cycleCount = cycleCount,
+            replaces = current.id,
+        )
+        val price = PricePeriodRecord(
+            id = RecordId.generate(),
+            updatedAt = stamp(),
+            subscriptionId = newId,
+            amountMinor = amountMinor,
+            effectiveFrom = startingOn.iso,
+        )
+        database.transaction {
+            write(ended)
+            write(replacement)
+            write(price)
+        }
+        return replacement
+    }
+
+    /**
+     * The chain of plans behind a subscription, oldest first, excluding itself.
+     * Follows `replaces` backwards; guarded against a cycle because a corrupted
+     * or maliciously edited link would otherwise loop forever.
+     */
+    fun planHistory(id: String): List<SubscriptionRecord> {
+        val out = mutableListOf<SubscriptionRecord>()
+        val seen = mutableSetOf(id)
+        var previous = subscription(id)?.replaces.orEmpty()
+        while (previous.isNotBlank() && seen.add(previous)) {
+            val record = subscription(previous) ?: break
+            out += record
+            previous = record.replaces
+        }
+        return out.reversed()
     }
 
     fun updateSubscription(record: SubscriptionRecord): SubscriptionRecord {

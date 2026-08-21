@@ -1,0 +1,19 @@
+-- Migration 4 -> 5: switching a plan without losing what came before.
+--
+-- The billing cycle is a column on the subscription, not a versioned table like
+-- price_periods, so every occurrence is recomputed from the anchor using
+-- whatever cycle is current. Editing monthly to yearly therefore reshapes months
+-- already paid: a 10.99 charge in July silently becomes 89.99, and the months
+-- between vanish. Correct history needs two records -- the old plan ended, the
+-- new one anchored where it starts.
+--
+-- Two records is right for the data and wrong for the person, who has one
+-- subscription to F1TV and expects one row. `replaces` reconciles the two: the
+-- new record names the one it supersedes, so the pair can be stored separately
+-- and presented as a single continuing subscription.
+--
+-- Held on the NEW record rather than as `superseded_by` on the old one, because
+-- it is written once at creation and never touched again. The other direction
+-- would mean editing an old record every time the plan changed, and each edit is
+-- a fresh chance for two devices to disagree about it.
+ALTER TABLE subscription ADD COLUMN replaces TEXT NOT NULL DEFAULT '';
