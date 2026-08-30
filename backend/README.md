@@ -5,7 +5,7 @@ dated charges.
 
 ```
 engine/          pure JS: dates, money, projection. No PocketBase, no clock, no I/O.
-test/            node --test suite over engine/ — 27 tests
+test/            node --test suite over engine/ — 40 tests
 pb_migrations/   schema: 4 collections + 4 aggregate views
 pb_hooks/        cron jobs, record hooks, custom endpoints
 pb_hooks/lib/    GENERATED copy of engine/ (npm run sync-hooks)

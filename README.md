@@ -7,7 +7,7 @@
 [![CI](../../actions/workflows/ci.yml/badge.svg)](../../actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Platforms](https://img.shields.io/badge/platforms-Android%20%7C%20Windows-blue.svg)](#installing-it)
-[![Tests](https://img.shields.io/badge/tests-258-brightgreen.svg)](#running-the-tests)
+[![Tests](https://img.shields.io/badge/tests-291-brightgreen.svg)](#running-the-tests)
 
 Android and Windows · no server · no account · no sign-up · no telemetry
 
@@ -219,7 +219,7 @@ clone builds and runs with no key at all.
 
 ## Running the tests
 
-**258 tests** across two suites, both run in CI on every push.
+**291 tests** across two suites, both run in CI on every push.
 
 The shared Kotlin module — projection, money, dates, history, merge, peer sync, CSV round-trips,
 and the local store exercised against a real in-memory SQLite rather than a fake:
