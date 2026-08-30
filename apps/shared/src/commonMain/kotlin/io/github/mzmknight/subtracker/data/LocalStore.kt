@@ -4,6 +4,7 @@ import io.github.mzmknight.subtracker.core.CsvBackup
 import io.github.mzmknight.subtracker.core.DashboardFigures
 import io.github.mzmknight.subtracker.core.Figures
 import io.github.mzmknight.subtracker.core.History
+import io.github.mzmknight.subtracker.core.Lock
 import io.github.mzmknight.subtracker.core.MonthHistory
 import io.github.mzmknight.subtracker.core.PlainDate
 import io.github.mzmknight.subtracker.core.PriceChange
@@ -56,10 +57,19 @@ class LocalStore(
         restore(clockStore.loadClockState())
     }
 
-    private fun stamp(): String {
+    /**
+     * Guards *stamping and persisting together*, which [HlcClock]'s own lock
+     * cannot: it makes each tick atomic, but not the save that must follow it.
+     * Interleaved, two callers can tick A then B and persist them in the other
+     * order, leaving the stored state older than a stamp already written to a
+     * record — and after a restart the clock would reissue it.
+     */
+    private val clockLock = Lock()
+
+    private fun stamp(): String = clockLock.withLock {
         val next = clock.tick()
         clockStore.saveClockState(next)
-        return next.encode()
+        next.encode()
     }
 
     // ------------------------------------------------------------ mapping
@@ -438,7 +448,9 @@ class LocalStore(
             payload.subscriptions + payload.prices + payload.overrides + payload.settings,
         )
         if (highest != null) {
-            clockStore.saveClockState(clock.observe(highest))
+            // Same pairing as stamp(): observe and save are one step or the
+            // stored state can end up behind what has already been issued.
+            clockLock.withLock { clockStore.saveClockState(clock.observe(highest)) }
         }
 
         return MergeReport(

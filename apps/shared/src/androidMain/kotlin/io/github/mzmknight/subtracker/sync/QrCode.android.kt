@@ -30,19 +30,24 @@ actual fun encodeQr(content: String, sizePx: Int): ImageBitmap? = runCatching {
 }.getOrNull()
 
 actual fun localAddresses(): List<String> = runCatching {
-    NetworkInterface.getNetworkInterfaces()
-        .toList()
-        .filter { it.isUp && !it.isLoopback }
-        .flatMap { networkInterface ->
-            networkInterface.inetAddresses.toList()
-                .filterIsInstance<Inet4Address>()
-                .filterNot { it.isLoopbackAddress || it.isLinkLocalAddress }
-                .map { networkInterface.name to it.hostAddress.orEmpty() }
-        }
-        .filter { it.second.isNotBlank() }
-        // wlan first: that is the interface a laptop on the same house wifi can
-        // actually reach.
-        .sortedBy { (name, _) -> if (name.startsWith("wlan")) 0 else 1 }
-        .map { it.second }
-        .distinct()
+    LocalAddresses.rank(
+        NetworkInterface.getNetworkInterfaces()
+            .toList()
+            .filter { it.isUp && !it.isLoopback }
+            .flatMap { adapter ->
+                adapter.inetAddresses.toList()
+                    .filterIsInstance<Inet4Address>()
+                    .filterNot { it.isLoopbackAddress || it.isLinkLocalAddress }
+                    .map {
+                        // On Android the name is the informative one ("wlan0");
+                        // displayName usually repeats it. Both are passed and
+                        // the shared ranking reads whichever says something.
+                        NetworkCandidate(
+                            name = adapter.name.orEmpty(),
+                            label = adapter.displayName.orEmpty(),
+                            address = it.hostAddress.orEmpty(),
+                        )
+                    }
+            }
+    )
 }.getOrDefault(emptyList())

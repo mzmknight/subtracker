@@ -1,5 +1,7 @@
 package io.github.mzmknight.subtracker.sync
 
+import io.github.mzmknight.subtracker.core.Lock
+
 /**
  * Hybrid logical clock.
  *
@@ -64,22 +66,32 @@ data class Hlc(
  * `now` is injected rather than read from a global clock so the tests can
  * simulate skew and backwards jumps, which is the entire reason this class
  * exists.
+ *
+ * Thread-safe, and it has to be. Every method here reads `last`, derives a new
+ * value from it and writes it back, which is only atomic if something makes it
+ * so. Two threads do meet here: the app's own writes are stamped on the Compose
+ * scope, while a peer that opened the connection is merged on a Ktor handler
+ * thread — and automatic syncing means that now happens without anyone pressing
+ * anything. Interleaved, two callers can read the same `last` and both derive
+ * the same stamp from it, so a counter meant to guarantee distinct, causally
+ * ordered timestamps quietly stops doing either.
  */
 class HlcClock(
     private val deviceId: String,
     private val now: () -> Long,
 ) {
+    private val lock = Lock()
     private var last: Hlc = Hlc(0, 0, deviceId)
 
     /** Current state, for persisting across restarts. */
-    fun peek(): Hlc = last
+    fun peek(): Hlc = lock.withLock { last }
 
-    fun restore(state: Hlc?) {
+    fun restore(state: Hlc?) = lock.withLock {
         if (state != null && state > last) last = Hlc(state.millis, state.counter, deviceId)
     }
 
     /** Stamp a local change. */
-    fun tick(): Hlc {
+    fun tick(): Hlc = lock.withLock {
         val wall = now()
         last = if (wall > last.millis) {
             Hlc(wall, 0, deviceId)
@@ -88,7 +100,7 @@ class HlcClock(
             // the counter rather than emitting a timestamp that sorts earlier.
             Hlc(last.millis, last.counter + 1, deviceId)
         }
-        return last
+        last
     }
 
     /**
@@ -96,7 +108,7 @@ class HlcClock(
      * writes afterwards sorts *after* what it just learned about. Without this,
      * a device with a slow clock would keep losing every merge.
      */
-    fun observe(remote: Hlc): Hlc {
+    fun observe(remote: Hlc): Hlc = lock.withLock {
         val wall = now()
         val highest = maxOf(wall, last.millis, remote.millis)
         val counter = when {
@@ -106,6 +118,6 @@ class HlcClock(
             else -> 0
         }
         last = Hlc(highest, counter, deviceId)
-        return last
+        last
     }
 }

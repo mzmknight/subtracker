@@ -3,8 +3,10 @@ package io.github.mzmknight.subtracker.ui
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -37,6 +39,7 @@ import io.github.mzmknight.subtracker.sync.PairingLink
 import io.github.mzmknight.subtracker.sync.PeerClient
 import io.github.mzmknight.subtracker.sync.PeerDiscovery
 import io.github.mzmknight.subtracker.sync.PeerServer
+import io.github.mzmknight.subtracker.sync.SyncThrottle
 import io.github.mzmknight.subtracker.sync.localAddresses
 import io.github.mzmknight.subtracker.sync.PricePeriodRecord
 import io.github.mzmknight.subtracker.sync.ServerClient
@@ -60,6 +63,16 @@ sealed interface Screen {
     data object History : Screen
     data object Devices : Screen
 }
+
+/**
+ * Whether "check the other devices for changes" belongs on this screen.
+ *
+ * The three read-only views of your own data, and nothing else: an edit form
+ * must not have a sync land in the middle of it, and Devices already offers
+ * syncing as a labelled control rather than a gesture.
+ */
+val Screen.isRefreshable: Boolean
+    get() = this is Screen.Dashboard || this is Screen.Subscriptions || this is Screen.History
 
 /** Everything the detail screen needs, all derived locally. */
 data class SubscriptionDetail(
@@ -279,6 +292,9 @@ class AppState(private val scope: CoroutineScope) {
             try {
                 withContext(Dispatchers.Default) { block() }
                 reload()
+                // Every local write goes through here, so this is the one place
+                // the other devices need telling from.
+                schedulePush()
                 message?.let { notice = it }
                 onSaved?.invoke()
             } catch (e: Exception) {
@@ -477,6 +493,7 @@ class AppState(private val scope: CoroutineScope) {
             try {
                 val report = withContext(Dispatchers.Default) { store.importCsv(text) }
                 reload()
+                schedulePush()
                 val changed = report.merged.subscriptionsChanged +
                     report.merged.pricesChanged + report.merged.overridesChanged
                 notice = buildString {
@@ -563,6 +580,9 @@ class AppState(private val scope: CoroutineScope) {
             } finally {
                 logoSearch = null
                 reload()
+                // Logos are written onto the subscription records themselves, so
+                // a search that found any is a change the other devices want.
+                if (found > 0) schedulePush()
             }
         }
     }
@@ -620,6 +640,10 @@ class AppState(private val scope: CoroutineScope) {
             try {
                 val report = withContext(Dispatchers.Default) { store.restoreCsv(text) }
                 reload()
+                // A restore deliberately outranks what is here; the paired
+                // devices need it too, or the first one to sync puts the old
+                // state straight back.
+                schedulePush()
                 notice = "Restored ${report.readFromFile} record" +
                     (if (report.readFromFile == 1) "." else "s.")
                 importProblems = report.problems
@@ -652,6 +676,8 @@ class AppState(private val scope: CoroutineScope) {
         AppSettings.rates = Rates(homeCurrency)
         rates = AppSettings.rates
         reload()
+        // Home currency and hand-entered rates are synced settings.
+        schedulePush()
         notice = "Totals are now shown in $currency. Any conversion rates were cleared."
     }
 
@@ -664,6 +690,7 @@ class AppState(private val scope: CoroutineScope) {
         AppSettings.rates = rates.with(currency, rate)
         rates = AppSettings.rates
         reload()
+        schedulePush()
         notice = "1 $currency = ${Rates.formatRate(rate)} $homeCurrency."
     }
 
@@ -671,6 +698,7 @@ class AppState(private val scope: CoroutineScope) {
         AppSettings.rates = rates.without(currency)
         rates = AppSettings.rates
         reload()
+        schedulePush()
         notice = if (rates.knows(currency)) {
             "$currency is back to the downloaded rate."
         } else {
@@ -781,6 +809,8 @@ class AppState(private val scope: CoroutineScope) {
         reminderRule = AppSettings.reminderRule
         ReminderScheduler.forgetAnnounced()
         refreshReminders()
+        // The rule follows the user between devices; the on/off switch does not.
+        schedulePush()
     }
 
     /**
@@ -831,7 +861,22 @@ class AppState(private val scope: CoroutineScope) {
 
     private val peers = PeerBook(Database.get())
     private val discovery: PeerDiscovery = Discovery.create()
-    private val server = PeerServer(store, peers, DeviceIdentity) { reload() }
+    /**
+     * Being synced *into* used to refresh the data and say nothing, so whichever
+     * device you did not press sync on updated in silence — which reads as the
+     * app having done nothing at all.
+     *
+     * The callback arrives on a Ktor handler thread, so everything here is
+     * handed to [scope] before it touches Compose state.
+     */
+    private val server = PeerServer(store, peers, DeviceIdentity) { peerName, taken ->
+        scope.launch {
+            reload()
+            knownPeers = peers.all()
+            lastSyncedAt = nowEpochMillis()
+            if (taken.changed) notice = taken.describeIncoming(peerName)
+        }
+    }
     private val client = PeerClient(store, peers, DeviceIdentity) { serverPort }
 
     var serverPort by mutableStateOf(0)
@@ -844,6 +889,21 @@ class AppState(private val scope: CoroutineScope) {
         private set
     var scanning by mutableStateOf(false)
         private set
+
+    /** Drives the pull-to-refresh spinner, which is separate from [busy]. */
+    var refreshing by mutableStateOf(false)
+        private set
+
+    /**
+     * Suppresses a resume sweep that follows too soon after any other sweep —
+     * including the one at launch, which Android's first ON_RESUME would
+     * otherwise repeat immediately.
+     */
+    private val resumeThrottle =
+        SyncThrottle(RESUME_SYNC_THROTTLE_MILLIS) { nowEpochMillis() }
+
+    /** The pending debounced push, cancelled and replaced by each new edit. */
+    private var pushJob: Job? = null
 
     val discoverySupported: Boolean get() = discovery.isSupported
 
@@ -887,9 +947,37 @@ class AppState(private val scope: CoroutineScope) {
         discovery.stopDiscovery()
     }
 
-    /** The address a peer should use to reach this device, for the QR. */
-    var pairingAddress by mutableStateOf<String?>(null)
+    /**
+     * Every address a peer might reach this device at, best guess first.
+     *
+     * All of them, not just the winner. The ranking is a heuristic over adapter
+     * names and it can be wrong — a machine with Hyper-V, a VPN and a docking
+     * station has several addresses that all look plausible and only one that
+     * works. When the guess is wrong the failure is silent and misleading: the
+     * QR scans perfectly and then the connection times out, which reads as a
+     * network fault rather than a wrong address. Offering the runners-up costs
+     * one line of UI and turns a dead end into a second try.
+     */
+    var pairingAddresses by mutableStateOf<List<String>>(emptyList())
         private set
+
+    var pairingAddressIndex by mutableStateOf(0)
+        private set
+
+    /** The address a peer should use to reach this device, for the QR. */
+    val pairingAddress: String? get() = pairingAddresses.getOrNull(pairingAddressIndex)
+
+    /** Whether there is anything else to offer if this one does not work. */
+    val hasAlternativeAddress: Boolean get() = pairingAddresses.size > 1
+
+    /**
+     * Move to the next candidate, wrapping. The QR is rebuilt from it, so the
+     * scanning device gets the new address without anyone retyping anything.
+     */
+    fun useNextAddress() {
+        if (pairingAddresses.size < 2) return
+        pairingAddressIndex = (pairingAddressIndex + 1) % pairingAddresses.size
+    }
 
     var scannerOpen by mutableStateOf(false)
         private set
@@ -900,13 +988,35 @@ class AppState(private val scope: CoroutineScope) {
         pairingCode = server.beginPairing()
         // The address is the bit people get wrong when typing it by hand, which
         // is the whole reason the QR is worth having.
-        pairingAddress = localAddresses().firstOrNull()
+        pairingAddresses = localAddresses()
+        pairingAddressIndex = 0
     }
 
     fun hidePairingCode() {
         server.cancelPairing()
         pairingCode = null
-        pairingAddress = null
+        pairingAddresses = emptyList()
+        pairingAddressIndex = 0
+    }
+
+    /** Whether the code on screen is still one the server would accept. */
+    fun pairingStillOpen(): Boolean = server.isPairingOpen
+
+    /**
+     * The server retired the code on its own — it was used, it expired, or it
+     * was cancelled after too many wrong guesses. Only the last of those is
+     * worth saying out loud: a successful pair announces itself already, and a
+     * code that timed out is not news. Being guessed at is.
+     */
+    fun pairingWindowClosed() {
+        if (pairingCode == null) return
+        val refused = server.pairingWasRefused
+        pairingCode = null
+        pairingAddresses = emptyList()
+        pairingAddressIndex = 0
+        if (refused) {
+            notice = "Too many wrong codes — that one is cancelled. Show a new code to try again."
+        }
     }
 
     /** The QR payload, or null when no pairing window is open. */
@@ -1040,31 +1150,143 @@ class AppState(private val scope: CoroutineScope) {
         syncWith(peer.host, peer.port, peer.id)
     }
 
+    /** What one pass over every paired device achieved. */
+    private data class Sweep(val attempted: Int, val reached: Int, val received: Int) {
+        val changed: Boolean get() = received > 0
+
+        /** No device to sync with, as opposed to none that answered. */
+        val hadNobodyToCall: Boolean get() = attempted == 0
+    }
+
+    /**
+     * One round trip with every paired device we hold an address for.
+     *
+     * The single place a sweep happens, so opening the app, returning to it,
+     * pulling down and saving an edit all converge the same way and cannot
+     * drift apart.
+     *
+     * Off the UI thread: each peer costs an HTTP round trip plus a full export
+     * of the local state, and on the push path that happens without the user
+     * having asked for anything.
+     */
+    private suspend fun sweepPeers(): Sweep {
+        val reachable = peers.all().filter { it.hasAddress }
+        if (reachable.isEmpty()) return Sweep(0, 0, 0)
+
+        resumeThrottle.record()
+
+        val sweep = withContext(Dispatchers.Default) {
+            var reached = 0
+            var received = 0
+            for (peer in reachable) {
+                // One unreachable device must not stop the others syncing. A
+                // cancellation is rethrown rather than counted as a failed peer:
+                // a push replaced by a newer one should stop here, not plough on
+                // through the rest of the list.
+                try {
+                    val report = client.sync(peer.host, peer.port, peer.id)
+                    reached++
+                    received += report.received
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    // Asleep, off the network, or moved — all ordinary.
+                }
+            }
+            Sweep(reachable.size, reached, received)
+        }
+
+        knownPeers = peers.all()
+        if (sweep.reached > 0) {
+            lastSyncedAt = nowEpochMillis()
+            reload()
+            refreshRates()
+        }
+        return sweep
+    }
+
     /**
      * Called on open: quietly brings every paired device up to date rather than
      * making the user remember to press something.
      */
     fun syncAllKnownPeers() {
-        val reachable = peers.all().filter { it.hasAddress }
-        if (reachable.isEmpty()) return
-
         scope.launch {
-            var received = 0
-            var reached = 0
-            for (peer in reachable) {
-                // One unreachable device must not stop the others syncing.
-                runCatching { client.sync(peer.host, peer.port, peer.id) }
-                    .onSuccess {
-                        reached++
-                        received += it.received
-                    }
+            val sweep = sweepPeers()
+            if (sweep.changed) notice = describeReceived(sweep.received)
+        }
+    }
+
+    /**
+     * Coming back to the app is the moment its numbers are most likely to be
+     * stale, so it is the moment worth spending a sweep on.
+     *
+     * Throttled against [resumeThrottle], which every sweep records into — so
+     * the launch sync and the resume that immediately follows it on Android
+     * count as one, and flicking between apps does not turn into a burst of
+     * round trips.
+     */
+    fun syncOnResume() {
+        if (!resumeThrottle.allow()) return
+        scope.launch {
+            val sweep = sweepPeers()
+            if (sweep.changed) notice = describeReceived(sweep.received)
+        }
+    }
+
+    /** Pull-to-refresh: the same sweep, but it always says what it found. */
+    fun refreshFromPeers() {
+        if (refreshing) return
+        scope.launch {
+            refreshing = true
+            try {
+                val sweep = sweepPeers()
+                // Pulling down is a question, so it always gets an answer —
+                // including the two different kinds of nothing, which mean very
+                // different things to someone wondering why their phone is out
+                // of date.
+                notice = when {
+                    sweep.changed -> describeReceived(sweep.received)
+                    sweep.hadNobodyToCall -> "No paired device with a saved address."
+                    sweep.reached == 0 -> "No paired device answered — are they on the same network?"
+                    else -> "Already up to date."
+                }
+            } finally {
+                refreshing = false
             }
-            knownPeers = peers.all()
-            if (reached > 0) {
-                lastSyncedAt = nowEpochMillis()
-                reload()
-                refreshRates()
-                if (received > 0) notice = "Synced — $received change${if (received == 1) "" else "s"} received."
+        }
+    }
+
+    private fun describeReceived(count: Int): String =
+        "Synced — $count change${if (count == 1) "" else "s"} received."
+
+    /**
+     * Send local changes on to every paired device, shortly after they are made.
+     *
+     * The point of the app is that two devices agree without being told to.
+     * Without this, every edit waits for someone to remember to press sync, and
+     * the device you did *not* edit on is quietly wrong until you do.
+     *
+     * Debounced rather than immediate, because one user action is often several
+     * writes — saving a new subscription writes the record and its opening
+     * price — and the payload is the whole state either way, so one push per
+     * burst carries exactly as much as three would.
+     *
+     * Deliberately silent, in both directions. A push happens because you edited
+     * something, not because you asked to sync, so a sleeping peer is the normal
+     * case rather than an error worth interrupting anyone about; and a push that
+     * succeeds has nothing to report either. Anything a push misses is caught by
+     * the next resume, pull or manual sync.
+     */
+    private fun schedulePush() {
+        pushJob?.cancel()
+        pushJob = scope.launch {
+            delay(PUSH_DEBOUNCE_MILLIS)
+            try {
+                sweepPeers()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // Silent by design; see above.
             }
         }
     }
@@ -1077,4 +1299,19 @@ class AppState(private val scope: CoroutineScope) {
 
     /** Exposed for the sync layer, which merges peers into this same store. */
     fun localStore(): LocalStore = store
+
+    private companion object {
+        /**
+         * Long enough that a burst of writes is one push, short enough that the
+         * other device is current by the time you have picked it up.
+         */
+        const val PUSH_DEBOUNCE_MILLIS = 2_000L
+
+        /**
+         * A resume inside this window of the last sweep is skipped. Covers both
+         * the launch sync immediately followed by Android's first ON_RESUME, and
+         * the user flicking between two apps.
+         */
+        const val RESUME_SYNC_THROTTLE_MILLIS = 30_000L
+    }
 }

@@ -52,6 +52,18 @@ data class SyncResponse(
     val deviceName: String = "",
     /** Only what the caller is missing or holds a stale copy of. */
     val payload: SyncPayload = SyncPayload(),
+    /**
+     * How many of the caller's records this device actually took.
+     *
+     * The caller cannot work this out for itself. It sends everything it has
+     * without knowing what the peer already holds, and the reply contains only
+     * what the *caller* was missing — so counting locally answers a different
+     * question and gets it wrong. This is the only place the number exists.
+     *
+     * Absent from a protocol 1 peer, where it decodes as 0 and the caller simply
+     * says nothing about what it sent, which is what it did before this existed.
+     */
+    val accepted: Int = 0,
     val protocol: Int = SyncPayload.PROTOCOL_VERSION,
 )
 

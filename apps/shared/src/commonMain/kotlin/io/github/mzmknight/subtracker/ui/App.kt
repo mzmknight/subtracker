@@ -28,6 +28,7 @@ import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -98,6 +99,11 @@ fun App() {
             delay(60_000)
         }
     }
+
+    // Coming back to the app is when its numbers are most likely to be stale.
+    // Throttled inside, and every other sweep resets that throttle, so the first
+    // ON_RESUME after launch does not repeat the sync that just ran.
+    OnAppResumed { state.syncOnResume() }
 
     LaunchedEffect(state.error) {
         state.error?.let {
@@ -192,13 +198,29 @@ fun App() {
                             ) {
                                 PageHeader(state, screen)
                                 Box(modifier = Modifier.fillMaxSize()) {
-                                    when (screen) {
-                                        is Screen.Dashboard -> DashboardScreen(state)
-                                        is Screen.Subscriptions -> SubscriptionsScreen(state)
-                                        is Screen.Detail -> DetailScreen(state)
-                                        is Screen.Edit -> EditScreen(state, screen.id)
-                                        is Screen.History -> HistoryScreen(state)
-                                        is Screen.Devices -> DevicesScreen(state)
+                                    // Only the three "what do I have" screens
+                                    // pull to refresh. A form must not sync out
+                                    // from under a half-typed edit, and Devices
+                                    // has explicit controls of its own that say
+                                    // what they do.
+                                    if (screen.isRefreshable) {
+                                        Refreshable(
+                                            refreshing = state.refreshing,
+                                            onRefresh = { state.refreshFromPeers() },
+                                        ) {
+                                            when (screen) {
+                                                is Screen.Subscriptions -> SubscriptionsScreen(state)
+                                                is Screen.History -> HistoryScreen(state)
+                                                else -> DashboardScreen(state)
+                                            }
+                                        }
+                                    } else {
+                                        when (screen) {
+                                            is Screen.Detail -> DetailScreen(state)
+                                            is Screen.Edit -> EditScreen(state, screen.id)
+                                            is Screen.Devices -> DevicesScreen(state)
+                                            else -> Unit
+                                        }
                                     }
 
                                     if (state.busy && state.figures == null) {
@@ -251,6 +273,20 @@ private fun PageHeader(state: AppState, screen: Screen) {
             Text(titleFor(screen), style = MaterialTheme.typography.headlineLarge)
             subtitleFor(state, screen)?.let {
                 Text(it, style = MaterialTheme.typography.bodyMedium, color = mutedColour())
+            }
+        }
+
+        // Where there is no pull gesture, the same request needs a control.
+        if (!pullToRefreshIsNative && screen.isRefreshable) {
+            IconButton(
+                onClick = { state.refreshFromPeers() },
+                enabled = !state.refreshing,
+            ) {
+                if (state.refreshing) {
+                    CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                } else {
+                    Icon(Icons.Default.Refresh, contentDescription = "Check other devices")
+                }
             }
         }
     }

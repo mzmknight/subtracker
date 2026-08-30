@@ -821,6 +821,141 @@ deliberately never exported), so they have to be paired again.
 
 ---
 
+### Syncing without being asked
+
+Pairing worked, merging worked, and the app still felt like it did not sync — because every
+exchange had to be started by hand, on the device you happened to be holding. Four changes, in
+the order they matter.
+
+**Push after a write.** Every local write already funnels through `mutate()`, so that is where
+the other devices get told: a two-second debounce, then one sweep of every paired device. The
+debounce is not for load — the payload is a few KB — it is because one user action is often
+several writes (a new subscription is a record *and* its opening price), and one push per burst
+carries exactly as much as three would. It is silent in both directions: a push happens because
+you edited something, not because you asked to sync, so a sleeping peer is the ordinary case and
+not an error worth interrupting anyone about.
+
+**A sweep on resume.** The sync on open lived in `LaunchedEffect(Unit)`, which runs once when the
+composition is created — and neither platform recreates the composition when you come back to it.
+So the launch sync ran once and the app never checked again, for as long as it stayed open. Now
+`OnAppResumed` (ON_RESUME on Android, window focus on the desktop) triggers a sweep, throttled by
+`SyncThrottle` to once per thirty seconds. The throttle is recorded by *every* sweep whatever
+started it, which is what stops Android's first ON_RESUME from immediately repeating the launch
+sync it arrives moments after.
+
+**The receiving device now says so.** `onSynced` refreshed the data and set no notice, so
+whichever device you did *not* press sync on updated in silence — which reads as nothing having
+happened. It now carries the peer's name and what was taken, and the passive side says "2 changes
+from Phone." The callback runs on a Ktor handler thread, so it hands everything to the app's scope
+before touching Compose state.
+
+**Pull to refresh**, on the three read-only screens only. Not on the edit form, where a sync
+landing mid-edit is the last thing anyone wants, and not on Devices, which offers syncing as a
+labelled control already. A mouse has no pull gesture, so the desktop gets a header button
+instead — same request, in the idiom that platform actually has.
+
+#### The sync report was counting the wrong thing
+
+`MergeReport.sentCount` came from `applyIncoming`, which measures "what is the payload I was
+handed missing?". That is the right question on the receiving side and the wrong one on the
+initiating side, where the reply holds *only what the caller lacked* — so nearly every local
+record counted as freshly sent. A sync in which nothing moved at all announced **"Sent 6
+changes"**, and "Already up to date" was unreachable.
+
+Only the far side can count what it accepted, so it now says: `SyncResponse.accepted`, filled from
+the report the server was already computing and discarding. A protocol 1 peer omits the field, it
+decodes as 0, and the caller simply says nothing about what it sent — which is what it did before
+the field existed.
+
+Worth keeping in mind when reading `applyIncoming`: its `sentCount` is still correct for the
+*server*, which is handed the peer's full state. It is only wrong as an answer to "what did I just
+send", and that is why the client overrides it rather than the field being removed.
+
+---
+
+### Two threads on the clock, and a code worth guessing
+
+Automatic syncing changed the threading picture, and these are the consequences.
+
+**The HLC was not thread-safe.** Every method on `HlcClock` reads `last`, derives a new value and
+writes it back — atomic only if something makes it so, and nothing did. This was survivable while
+the only other thread was Ktor's, because the app's own writes and the client-side merge both ran
+on the Compose scope and so could not race each other. Pushing after every write moved the merge
+onto a background dispatcher and made it happen constantly, which turned a theoretical race into
+a real one. Interleaved, two callers read the same `last` and derive the *same* stamp: a counter
+whose entire job is to keep timestamps distinct and causally ordered stops doing either, and LWW
+starts settling ties by device id instead of by what actually happened later.
+
+`tick`, `observe`, `peek` and `restore` are now guarded. So, separately, is the pairing of
+*stamping and persisting* in `LocalStore`: the clock's own lock makes each tick atomic but not the
+save that follows it, and two callers can tick A then B yet persist them in the other order —
+leaving the stored state older than a stamp already written onto a record, which a restart would
+then reissue. `HlcConcurrencyTest` fails against the unguarded version on all three counts.
+
+The lock is an `expect class` in `core/Locking.kt` with identical JVM actuals, matching how
+`Time`, `ImageScaling` and `DefaultDeviceName` already handle "both targets are the JVM but there
+is no shared JVM source set".
+
+**Pairing codes could be brute-forced.** Six digits is a million possibilities and the window
+stays open for three minutes; nothing counted failures, so a LAN attacker could simply try them
+all, comfortably inside the window. The code being short was only ever defensible because it is
+short-lived and single-use, and neither property helps against exhaustive search.
+
+Five wrong guesses now closes the window — enough for a human mistyping a code they can see, not
+enough for anything working through the space. The counter is guarded by the same lock as the rest
+of the pairing state, because Ktor serves requests concurrently and an unguarded counter is
+defeated by exactly the parallelism an attacker would use: fire fifty at once and each reads the
+count before any has incremented it. There is a test that does precisely that.
+
+Closing the window silently would leave a dead code on screen looking live, so `PeerServer` records
+*why* it closed and the Devices screen polls while a code is shown. Only a refusal is announced —
+a successful pair already says so, and an expired code is not news, but a code cancelled because
+something was guessing at it is worth explaining or the next one looks broken too.
+
+**`/pair` had no guard**, alone among the handlers, so malformed JSON became a bare 500 with an
+empty body that never reached `lastFailure`. It is now wrapped like `/sync`. A broken request is
+explicitly *not* counted as a wrong guess.
+
+---
+
+### The QR was naming the wrong adapter
+
+A device showing a pairing code has to say where it is, and it gets one guess. Get it wrong and the
+failure is the worst kind: the QR decodes perfectly and the connection then times out, which reads
+as a network fault and sends people looking for one that does not exist.
+
+The old ranking demoted VPN adapters by matching "nord", "tap", "tun" and "vpn" against
+`NetworkInterface.getName()`. That is right on Android, where the name is `wlan0`. **On Windows it
+never matched anything.** Java reports Windows adapters with opaque names — `ethernet_32770`,
+`iftype53_32772`, `wireless_0` — and puts the readable one in `getDisplayName()`:
+
+```
+name=ethernet_32770  display=<vendor> Gigabit Ethernet Controller   192.168.1.24
+name=iftype53_32772  display=<product> Tunnel                       10.2.0.2
+```
+
+So on the platform with by far the most virtual adapters, the filter meant to skip them never fired
+once. Worse, the two are not distinguishable by address either: a VPN tunnel's `10.x` looks exactly
+like a home network, so both scored 0 on the address rule, tied, and *enumeration order* picked the
+winner. That is right by luck on some machines and wrong on others, which is the worst way for
+something to be right.
+
+The ranking is now common, pure and tested (`LocalAddresses`), with the platforms reduced to
+gathering `(name, displayName, address)` triples. It reads both fields, since which one carries the
+meaning is exactly what differs between the two platforms. Adapter kind dominates the address
+range, because Hyper-V, WSL, VMware and VirtualBox all hand out addresses in the ranges a home
+network uses — the address is no evidence at all, and only the adapter is.
+
+`LocalAddressTest` is built from real adapter tables rather than invented ones, the previous
+guesswork being the whole problem. Five of its nine cases fail against the old algorithm.
+
+**The heuristic can still be wrong**, so it is no longer the last word. `showPairingCode` keeps
+every candidate instead of `firstOrNull()`, and the pairing panel offers "Not working? Try another
+address (1 of 3)", rebuilding the QR from the new one. A guess that cannot be overridden is what
+turns a wrong address into a dead end.
+
+---
+
 ## 9. Known risks
 
 - **Month-end and leap-year arithmetic** — the top source of wrong numbers. Mitigated by rule 1

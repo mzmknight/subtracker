@@ -30,27 +30,24 @@ actual fun encodeQr(content: String, sizePx: Int): ImageBitmap? = runCatching {
 }.getOrNull()
 
 actual fun localAddresses(): List<String> = runCatching {
-    NetworkInterface.getNetworkInterfaces()
-        .toList()
-        .filter { it.isUp && !it.isLoopback }
-        .flatMap { networkInterface ->
-            networkInterface.inetAddresses.toList()
-                .filterIsInstance<Inet4Address>()
-                .filterNot { it.isLoopbackAddress || it.isLinkLocalAddress }
-                .map { networkInterface.name to it.hostAddress }
-        }
-        // A VPN adapter's address is usually useless for reaching a phone on the
-        // house wifi, so ordinary private ranges are offered first.
-        .sortedBy { (name, address) ->
-            when {
-                name.contains("nord", ignoreCase = true) ||
-                    name.contains("tap", ignoreCase = true) ||
-                    name.contains("tun", ignoreCase = true) ||
-                    name.contains("vpn", ignoreCase = true) -> 2
-                address.startsWith("192.168.") || address.startsWith("10.") -> 0
-                else -> 1
+    LocalAddresses.rank(
+        NetworkInterface.getNetworkInterfaces()
+            .toList()
+            .filter { it.isUp && !it.isLoopback }
+            .flatMap { adapter ->
+                adapter.inetAddresses.toList()
+                    .filterIsInstance<Inet4Address>()
+                    .filterNot { it.isLoopbackAddress || it.isLinkLocalAddress }
+                    .map {
+                        // displayName is the half that carries anything readable
+                        // on Windows: the name is "iftype53_32772" where the
+                        // display name is "NordLynx Tunnel".
+                        NetworkCandidate(
+                            name = adapter.name.orEmpty(),
+                            label = adapter.displayName.orEmpty(),
+                            address = it.hostAddress.orEmpty(),
+                        )
+                    }
             }
-        }
-        .map { it.second }
-        .distinct()
+    )
 }.getOrDefault(emptyList())

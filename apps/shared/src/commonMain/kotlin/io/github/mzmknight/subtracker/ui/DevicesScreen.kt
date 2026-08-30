@@ -30,10 +30,12 @@ import io.github.mzmknight.subtracker.core.Rates
 import io.github.mzmknight.subtracker.core.ReminderRule
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.delay
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -149,6 +151,17 @@ fun DevicesScreen(state: AppState) {
             ) {
                 Spacer(Modifier.height(12.dp))
                 val code = state.pairingCode
+
+                // The server can retire the code without the UI asking — it
+                // expires, it gets used, or it is cancelled after too many wrong
+                // guesses. Polled while one is on screen so a dead code stops
+                // being displayed as a live one.
+                LaunchedEffect(code) {
+                    if (code == null) return@LaunchedEffect
+                    while (state.pairingStillOpen()) delay(1_000)
+                    state.pairingWindowClosed()
+                }
+
                 if (code == null) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Button(onClick = { state.showPairingCode() }) { Text("Show pairing code") }
@@ -194,6 +207,23 @@ fun DevicesScreen(state: AppState) {
                         style = MaterialTheme.typography.bodySmall,
                         color = mutedColour(),
                     )
+
+                    // Which address is the reachable one is a guess, and on a
+                    // machine with a VPN or Hyper-V it is a guess between
+                    // several that all look right. A wrong one fails silently —
+                    // the QR scans and then times out — so the way out has to be
+                    // visible here rather than requiring the other device to
+                    // type an address by hand.
+                    if (state.hasAlternativeAddress) {
+                        TextButton(onClick = { state.useNextAddress() }) {
+                            Text(
+                                "Not working? Try another address " +
+                                    "(${state.pairingAddressIndex + 1} of ${state.pairingAddresses.size})",
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                    }
+
                     Spacer(Modifier.height(8.dp))
                     TextButton(onClick = { state.hidePairingCode() }) { Text("Done") }
                 }

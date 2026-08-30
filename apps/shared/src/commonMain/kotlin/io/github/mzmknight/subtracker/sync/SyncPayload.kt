@@ -57,5 +57,17 @@ data class MergeReport(
         else -> "Received $received, sent $sentCount"
     }
 
+    /**
+     * Phrased for the device that was synced *into*.
+     *
+     * It did not ask for any of this, so the message has to say where it came
+     * from — "Received 3 changes" on a phone you never touched is a mystery
+     * rather than an explanation.
+     */
+    fun describeIncoming(peerName: String): String {
+        val who = peerName.ifBlank { "another device" }
+        return "$received change${plural(received)} from $who."
+    }
+
     private fun plural(n: Int) = if (n == 1) "" else "s"
 }

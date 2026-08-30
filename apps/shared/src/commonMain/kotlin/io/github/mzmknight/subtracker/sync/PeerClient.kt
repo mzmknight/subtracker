@@ -120,7 +120,13 @@ class PeerClient(
         val reply: SyncResponse = response.body()
         val report = store.applyIncoming(reply.payload)
         peers.touch(reply.deviceId, reply.deviceName, host, port)
-        report
+        // applyIncoming counts "what the payload it was given is missing", which
+        // is the right question on the receiving side but the wrong one here:
+        // the reply holds only what *we* lacked, so measuring against it counts
+        // almost every local record as freshly sent. It reported "Sent 6
+        // changes" after a sync in which nothing moved at all. The peer is the
+        // only side that can count this, and it just told us.
+        report.copy(sentCount = reply.accepted)
     }
 
     /**
